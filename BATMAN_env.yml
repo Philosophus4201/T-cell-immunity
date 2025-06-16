@@ -1,0 +1,16 @@
+name: BATMAN
+channels:
+  - conda-forge
+  - defaults
+  - https://repo.anaconda.com/pkgs/main
+  - https://repo.anaconda.com/pkgs/r
+dependencies:
+  - pip=25.0=py311h06a4308_0
+  - python=3.11.11=he870216_0
+  - pip:
+      - pybatman==0.0.1
+      - mhctools==1.9.0
+      - matplotlib==3.10.1
+      - numpy==1.26.4
+      - pandas==2.2.3
+prefix: /home/orlov.av/anaconda3/envs/BATMAN

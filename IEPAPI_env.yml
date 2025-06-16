@@ -1,0 +1,18 @@
+name: IEPAPI
+channels:
+  - defaults
+  - https://repo.anaconda.com/pkgs/main
+  - https://repo.anaconda.com/pkgs/r
+dependencies:
+  - python=3.7.9=h7579374_0
+  - pip=22.3.1=py37h06a4308_0
+  - pip:
+      - torch==1.8.0
+      - torchvision==0.2.2
+      - numpy==1.18.5
+      - pandas==1.2.4
+      - tqdm==4.19.9
+      - matplotlib==3.3.2
+      - seaborn==0.11.1
+      - weblogo==3.7.12
+prefix: /home/orlov.av/anaconda3/envs/IEPAPI
