@@ -1,4 +1,4 @@
-### T cell cross-recactivity predictor pipeline
+# T cell cross-recactivity predictor pipeline
 
 
 ## 1) Installaton tutorial
@@ -11,4 +11,4 @@ conda env create -f BATMAN_env.yml
 conda env create -f IEPAPI_env.yml
 ```
 
-The script must be run from T-cell-immunity directory
+The script must be run from T-cell-immunity/ directory
