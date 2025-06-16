@@ -1,0 +1,5 @@
+pybatman==0.0.1
+mhctools==1.9.0
+matplotlib==3.10.1
+numpy==1.26.4
+pandas==2.2.3
