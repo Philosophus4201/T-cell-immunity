@@ -11,4 +11,12 @@ conda env create -f BATMAN_env.yml
 conda env create -f IEPAPI_env.yml
 ```
 
-The script must be run from T-cell-immunity/ directory
+The script must be run from T-cell-immunity/ directory and IEPAPI need to be installed. You can clone IEPAPI repository using this command:
+```console
+git clone https://github.com/ddd9898/IEPAPI.git
+'''
+## 1) Run code
+
+
+Now you can use Cross_reaact.py as module in your scrips. For convenience, we have provided a notebook (Example_notebook.ipynb) that shows how you can run the code on your data 
+
