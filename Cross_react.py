@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import subprocess
 from pybatman.functions import train, peptide2index
-from multiprocessing import Pool, Manager
+from multiprocessing import Pool
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import os
@@ -54,17 +54,17 @@ class Population:
         return pd.DataFrame(freq_d)
     
     
-    def get_individual_sample(self,immun_predictor,N=1,mean_number=10,protein=None):
+    def get_individual_sample(self,immun_predictor,N=1,mean_number=10):
         sample_list = []
         for n in range(N):
             genotype = np.random.choice(a=np.array(self.genotype_freq['Genotype']), p = self.genotype_freq['Freq'])
-            sample_list.append(Individual(genotype,immun_predictor,mean_number,protein))
+            sample_list.append(Individual(genotype,immun_predictor,mean_number))
         return sample_list
 
 class Protein:
     """A class to represent a protein
     Attributes:
-    seq: amino acid sequence of protein"""
+    protein_seq: amino acid sequence of protein"""
     
     def __init__(self,seq, k=9, peptide_weight=None):
         self.protein_seq = seq
@@ -118,11 +118,9 @@ class Individual:
     protein_wild: object of the class Protein that represented a wild protein
     """
     
-    def __init__(self,genotype,immun_predictor,mean_number, protein_wild=None):
+    def __init__(self,genotype,immun_predictor,mean_number):
         self.genotype = genotype
-        self.protein_wild = protein_wild
-        if self.protein_wild is not None:
-            self.pMHC_pool = self.pMHC_selection(self.get_pMHC_pool(self.protein_wild,immun_predictor),mean_number)
+        self.protein_wild = None
         
     def get_pMHC_pool(self,protein, immun_predictor):
         pep_list = protein.peptide_pool
@@ -135,14 +133,16 @@ class Individual:
         res = immun_predictor.predict(pep_list,self.genotype)
         pMHC_d['pres'] = res[1]
         pMHC_d['immun'] = res[0]
+        cache = res[2]
         for i in range(len(pMHC_d['peptide'])):
             pMHC_list.append(peptide_MHC_complex(pMHC_d['peptide'][i],pMHC_d['HLA'][i],pMHC_d['pres'][i],pMHC_d['immun'][i],pMHC_d['HLA_i'][i]))
-        return pMHC_list
+        return (pMHC_list, cache)
                 
     def set_protein_wild(self, protein_wild,immun_predictor,mean_number=20):
         self.protein_wild = protein_wild
-        self.pMHC_pool = self.pMHC_selection(self.get_pMHC_pool(self.protein_wild,immun_predictor),mean_number)
-
+        pool_result = self.get_pMHC_pool(self.protein_wild,immun_predictor)
+        self.pMHC_pool = self.pMHC_selection(pool_result[0],mean_number)
+        return pool_result[1]
         
     def pMHC_selection(self,pMHC,mean_number):
         P=[]
@@ -165,7 +165,7 @@ class Individual:
         wild_pMHC = self.pMHC_pool
         if len(wild_pMHC) == 0:
             return 0
-        mutant_pMHC = self.get_pMHC_pool(mutant_protein,immun_predictor)
+        mutant_pMHC = self.get_pMHC_pool(mutant_protein,immun_predictor)[0]
         for w_pMHC in wild_pMHC:
             for m_pMHC in mutant_pMHC:
                 if w_pMHC.HLA_i == m_pMHC.HLA_i:
@@ -234,10 +234,8 @@ class IEPAPI_immunogenicity_predictor:
     hla_pseudoseq_data = None
     path_to_IEPAPI  = None
     python_path = None
-    def __init__(self, path_to_IEPAPI=None, path_to_hla_db=None, python_path=None):
-        manager = Manager()
-        self.log = manager.dict()
-        self.log_lock = manager.Lock()
+    log = {}
+    def __init__(self, path_to_IEPAPI=None, path_to_hla_db=None, python_path=None, cache_file=None):
         if path_to_IEPAPI is None:
             self.path_to_IEPAPI = os.getcwd() + '/IEPAPI/'
         else:
@@ -256,41 +254,42 @@ class IEPAPI_immunogenicity_predictor:
         else:
             self.IEPAPI_db = path_to_hla_db
         self.hla_pseudoseq_data = pd.read_csv(self.IEPAPI_db)
-        
-        
+
+            
     def predict(self,peptides,hla_vector):
+        new_cache = {}
         immun = np.array([-1.0]*(len(peptides)*len(hla_vector)))
         pres = np.array([-1.0]*(len(peptides)*len(hla_vector)))
         with open(self.path_to_IEPAPI+f'IEPAPI_input{os.getpid()}', 'w') as file:
             file.write('peptide,HLA,seq')
             file.write('\n')
-            with self.log_lock:
-                for j,hla in enumerate(hla_vector):
-                    hla = 'HLA-'+ hla
-                    hla = hla[0:11]
-                    hla_to_df = hla.replace('*','').replace(':','')
-                    hla_pseudoseq = self.hla_pseudoseq_data.loc[self.hla_pseudoseq_data['HLA'] == hla_to_df,'pseudoSeq'].iloc[0]
-                    for i in range(len(peptides)):
-                        if peptides[i]+hla in self.log:
-                            log_pep = self.log[peptides[i]+hla]
-                            pres[i+len(peptides)*j] = log_pep[0]
-                            immun[i+len(peptides)*j] = log_pep[1]
-                        else:
-                            file.write(f'{peptides[i]},{hla},{hla_pseudoseq}')
-                            file.write('\n')
+            for j,hla in enumerate(hla_vector):
+                hla = 'HLA-'+ hla
+                hla = hla[0:11]
+                hla_to_df = hla.replace('*','').replace(':','')
+                hla_pseudoseq = self.hla_pseudoseq_data.loc[self.hla_pseudoseq_data['HLA'] == hla_to_df,'pseudoSeq'].iloc[0]
+                for i in range(len(peptides)):
+                    if peptides[i]+hla in self.log:
+                        log_pep = self.log[peptides[i]+hla]
+                        pres[i+len(peptides)*j] = log_pep[0]
+                        immun[i+len(peptides)*j] = log_pep[1]
+                    else:
+                        file.write(f'{peptides[i]},{hla},{hla_pseudoseq}')
+                        file.write('\n')
         if all(immun != -1):
             os.remove(self.path_to_IEPAPI+f'IEPAPI_input{os.getpid()}')
-            return (immun, pres)
+            return (immun, pres, new_cache)
         subprocess.run([self.python_path, self.path_to_IEPAPI+'IEPAPI_predict.py', '--input', f'IEPAPI_input{os.getpid()}', '--output',f'IEPAPI_output{os.getpid()}'],  cwd=self.path_to_IEPAPI)
         out = pd.read_csv(self.path_to_IEPAPI+f'IEPAPI_output{os.getpid()}')
-        with self.log_lock:
-            for j,i in enumerate(np.where(immun==-1.0)[0]):
-                immun[i] = out.iloc[j,3]
-                pres[i] = out.iloc[j,2]
-                self.log[out.iloc[j,0]+out.iloc[j,1]] = (out.iloc[j,2],out.iloc[j,3])
+        for j,i in enumerate(np.where(immun==-1.0)[0]):
+            h, pe, pr, im = out.iloc[j,0], out.iloc[j,1], out.iloc[j,2], out.iloc[j,3]
+            immun[i] = im
+            pres[i] = pr
+            self.log[h+pe] = (pr,im)
+            new_cache[h+pe] = (pr,im)
         os.remove(self.path_to_IEPAPI+f'IEPAPI_output{os.getpid()}')
         os.remove(self.path_to_IEPAPI+f'IEPAPI_input{os.getpid()}')
-        return (immun, pres)
+        return (immun, pres, new_cache)
 
     
 
@@ -323,22 +322,28 @@ def compare(a,b):
 
 def ind_dist(individual, cross_react_predictor,immun_predictor,protein1,protein2,k, N_iterations):
     result = []
+    result_cache = {}
     for i in range(N_iterations):
-        individual.set_protein_wild(protein1, immun_predictor)
+        result_cache.update(individual.set_protein_wild(protein1, immun_predictor))
         result.append(individual.cross_react(cross_react_predictor, immun_predictor,protein2))
-    return result
+    return (result, result_cache)
     
 def Cross_react_predict(protein1, protein2, genotypes, immun_predictor,cross_react_predictor,N_iterations=50,k=10,N_proc=2,N_individuals=None):
+    result_cache = {}
     if type(genotypes).__name__ == 'Population':
         individuals = genotypes.get_individual_sample(immun_predictor,N=N_individuals,mean_number=k)
     else:
         individuals = []
         for genotype in genotypes:
-            individuals.append((Individual(genotype,immun_predictor,k, protein1)))
-    pool = Pool(processes=N_proc)
-    args = [(ind,cross_react_predictor, immun_predictor, protein1, protein2,k,N_iterations) for ind in individuals]
-    result = pool.starmap(ind_dist,args)
-    return result
+            individuals.append((Individual(genotype,immun_predictor,k)))
+    with Pool(processes=N_proc) as pool:
+        args = [(ind,cross_react_predictor, immun_predictor, protein1, protein2,k,N_iterations) for ind in individuals]
+        result = pool.starmap(ind_dist,args)
+    for i in result:
+        result_cache.update(i[1])
+    
+    immun_predictor.log.update(result_cache)
+    return [r[0] for r in result]
 
 
 def Cross_react_plot(genotypes,immun_predictor,cross_react_predictor, protein1, protein2, protein3=None,N_iterations=50,k=10,N_proc=2,N_individuals=None, savefile=None):
@@ -397,9 +402,17 @@ def Cross_react_plot(genotypes,immun_predictor,cross_react_predictor, protein1, 
             plt.savefig(savefile)
             return
         plt.show()
-        
-        
-    
+
+
+def protein_combine(*args):
+    new_pool = []
+    new_seq = ''
+    for arg in args:
+        new_seq += arg.protein_seq + '+'
+        new_pool += arg.peptide_pool
+    new_protein = Protein(new_seq)
+    new_protein.peptide_pool = new_pool
+    return new_protein
     
 
     
