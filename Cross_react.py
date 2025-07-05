@@ -7,6 +7,8 @@ from multiprocessing import Pool
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import os
+from abc import ABC, abstractmethod
+from mhctools import MHCflurry
 
 class Population:
     """A class to represent a population.
@@ -61,22 +63,34 @@ class Population:
             sample_list.append(Individual(genotype,immun_predictor,mean_number))
         return sample_list
 
+
+
 class Protein:
     """A class to represent a protein
     Attributes:
     protein_seq: amino acid sequence of protein"""
     
-    def __init__(self,seq, k=9, peptide_weight=None):
+    def __init__(self,seq):
         self.protein_seq = seq
-        self.peptide_pool = self.get_peptide_pool(seq,k,peptide_weight)
+        self.peptide_pool = None
+
+
+
+class Protein_processing:
+
+    def get_peptide_weight(self):
+        return None
     
-    def get_peptide_pool(self,seq,k=9, peptide_weight=None):
+    def processing(self, protein, k=9):
+        peptide_weight = self.get_peptide_weight()
         peptide_list = []
+        seq = protein.protein_seq
         for i in range(len(seq)-k):
             peptide_list.append(seq[i:i+k])
         if peptide_weight is not None:
             peptide_list = np.random.choice(a = peptide_list,p = peptide_weight)
-        return peptide_list
+        protein.peptide_pool = sorted(peptide_list)
+        return protein
 
 
 class peptide_MHC_complex:
@@ -88,8 +102,7 @@ class peptide_MHC_complex:
     immun: immunogenecity score for peptide-HLA pair
     HLA_i: HLA index"""
     
-    def __init__(self,peptide,HLA,pres,immun,
-                 HLA_i):
+    def __init__(self,peptide,HLA,pres,immun,HLA_i):
         self.peptide = peptide
         self.HLA = HLA
         self.pres = pres
@@ -109,6 +122,7 @@ class peptide_MHC_complex:
             homology = 1
         return homology
 
+
 class Individual:
     """A class to represent a individual
     Attributes:
@@ -119,7 +133,7 @@ class Individual:
     """
     
     def __init__(self,genotype,immun_predictor,mean_number):
-        self.genotype = genotype
+        self.genotype = sorted(genotype)
         self.protein_wild = None
         
     def get_pMHC_pool(self,protein, immun_predictor):
@@ -133,16 +147,14 @@ class Individual:
         res = immun_predictor.predict(pep_list,self.genotype)
         pMHC_d['pres'] = res[1]
         pMHC_d['immun'] = res[0]
-        cache = res[2]
         for i in range(len(pMHC_d['peptide'])):
             pMHC_list.append(peptide_MHC_complex(pMHC_d['peptide'][i],pMHC_d['HLA'][i],pMHC_d['pres'][i],pMHC_d['immun'][i],pMHC_d['HLA_i'][i]))
-        return (pMHC_list, cache)
+        return pMHC_list
                 
-    def set_protein_wild(self, protein_wild,immun_predictor,mean_number=20):
+    def set_protein_wild(self, protein_wild,immun_predictor,mean_number=10):
         self.protein_wild = protein_wild
         pool_result = self.get_pMHC_pool(self.protein_wild,immun_predictor)
-        self.pMHC_pool = self.pMHC_selection(pool_result[0],mean_number)
-        return pool_result[1]
+        self.pMHC_pool = self.pMHC_selection(pool_result,mean_number)
         
     def pMHC_selection(self,pMHC,mean_number):
         P=[]
@@ -165,14 +177,26 @@ class Individual:
         wild_pMHC = self.pMHC_pool
         if len(wild_pMHC) == 0:
             return 0
-        mutant_pMHC = self.get_pMHC_pool(mutant_protein,immun_predictor)[0]
+        mutant_pMHC = self.get_pMHC_pool(mutant_protein,immun_predictor)
         for w_pMHC in wild_pMHC:
             for m_pMHC in mutant_pMHC:
                 if w_pMHC.HLA_i == m_pMHC.HLA_i:
                     result = np.append(result, w_pMHC.cross(cross_react_predictor,m_pMHC))
         return sum(result)/len(wild_pMHC)
-        
-class BATMAN_predictor:
+
+
+class Basic_cross_react_predictor:
+
+    @abstractmethod
+    def predict(self,wild_peptides,mutant_peptides):
+        pass
+
+    @abstractmethod
+    def norm_distance(self,peptide_distance):
+        return peptide_distance
+
+    
+class BATMAN_predictor(Basic_cross_react_predictor):
     """A class to BATMAN tool
     Attributes:
     path_to_BATMAN: the absolute path to BATMAN folder (pybatman package)"""
@@ -225,7 +249,22 @@ class BATMAN_predictor:
         return peptide_distance
 
 
-class IEPAPI_immunogenicity_predictor:
+
+class Basic_immunogenecity_predictor:
+    log = {}
+    
+    @abstractmethod
+    def predict(self,peptides,hla_vector):
+        pass
+
+    def update_log(self,new_data):
+        self.log.update(new_data)
+
+    def get_log(self):
+        return self.log
+
+        
+class IEPAPI_immunogenicity_predictor(Basic_immunogenecity_predictor):
     """A class to IEPAPI tool
     Attributes:
     path_to_IEPAPI: the absolute path to IEPAPI folder
@@ -235,7 +274,7 @@ class IEPAPI_immunogenicity_predictor:
     path_to_IEPAPI  = None
     python_path = None
     log = {}
-    def __init__(self, path_to_IEPAPI=None, path_to_hla_db=None, python_path=None, cache_file=None):
+    def __init__(self, path_to_IEPAPI=None, path_to_hla_db=None, python_path=None):
         if path_to_IEPAPI is None:
             self.path_to_IEPAPI = os.getcwd() + '/IEPAPI/'
         else:
@@ -257,15 +296,16 @@ class IEPAPI_immunogenicity_predictor:
 
             
     def predict(self,peptides,hla_vector):
-        new_cache = {}
         immun = np.array([-1.0]*(len(peptides)*len(hla_vector)))
         pres = np.array([-1.0]*(len(peptides)*len(hla_vector)))
         with open(self.path_to_IEPAPI+f'IEPAPI_input{os.getpid()}', 'w') as file:
             file.write('peptide,HLA,seq')
             file.write('\n')
             for j,hla in enumerate(hla_vector):
-                hla = 'HLA-'+ hla
-                hla = hla[0:11]
+                if 'HLA-' not in hla:
+                    hla = 'HLA-'+hla
+                if len(hla) > 11:
+                    hla = hla[0:11]
                 hla_to_df = hla.replace('*','').replace(':','')
                 hla_pseudoseq = self.hla_pseudoseq_data.loc[self.hla_pseudoseq_data['HLA'] == hla_to_df,'pseudoSeq'].iloc[0]
                 for i in range(len(peptides)):
@@ -278,42 +318,61 @@ class IEPAPI_immunogenicity_predictor:
                         file.write('\n')
         if all(immun != -1):
             os.remove(self.path_to_IEPAPI+f'IEPAPI_input{os.getpid()}')
-            return (immun, pres, new_cache)
+            return immun, pres
         subprocess.run([self.python_path, self.path_to_IEPAPI+'IEPAPI_predict.py', '--input', f'IEPAPI_input{os.getpid()}', '--output',f'IEPAPI_output{os.getpid()}'],  cwd=self.path_to_IEPAPI)
         out = pd.read_csv(self.path_to_IEPAPI+f'IEPAPI_output{os.getpid()}')
         for j,i in enumerate(np.where(immun==-1.0)[0]):
-            h, pe, pr, im = out.iloc[j,0], out.iloc[j,1], out.iloc[j,2], out.iloc[j,3]
+            pe, h, pr, im = out.iloc[j,0], out.iloc[j,1], out.iloc[j,2], out.iloc[j,3]
             immun[i] = im
             pres[i] = pr
-            self.log[h+pe] = (pr,im)
-            new_cache[h+pe] = (pr,im)
+            self.log[pe+h] = (pr,im)
         os.remove(self.path_to_IEPAPI+f'IEPAPI_output{os.getpid()}')
         os.remove(self.path_to_IEPAPI+f'IEPAPI_input{os.getpid()}')
-        return (immun, pres, new_cache)
+        return immun, pres
 
     
 
-from mhctools import MHCflurry
-def baseline(protein1,protein2,a):
-    for j,i in enumerate(a):
-        if len(i) > 7:
-            a[j]=a[j][:7]
-    predictor = MHCflurry(alleles=a)
-    protein_sequences = {
-    "Protein1": protein1.protein_seq,
-    "Protein2": protein2.protein_seq}
-    binding_predictions = predictor.predict_subsequences(protein_sequences, peptide_lengths=[9])
-    df = binding_predictions.to_dataframe()
-    df = df.loc[df['percentile_rank']<=2,].reset_index(drop=True)
-    var1 = df.loc[df['source_sequence_name']=="Protein1","peptide"].tolist()
-    var2 = df.loc[df['source_sequence_name']=="Protein2","peptide"].tolist()
-    c = 0
-    for v in var2:
-        if v in var1:
-            c +=1
-    return(c/len(var2))
+class Baseline_MHCflurry_predictor(Basic_immunogenecity_predictor):
+    log = {}
+    def predict(self,peptides,hla_vector):
+        pres =  np.array([-1.0]*(len(peptides)*len(hla_vector)))
+        immun = np.ones(len(hla_vector)*len(peptides))
+        pep_to_predict = []
+        hla_to_predict = []
+        for j,hla in enumerate(hla_vector):
+            if 'HLA-' not in hla:
+                hla = 'HLA-'+hla
+            if len(hla) > 11:
+                hla = hla[0:11]
+            for i in range(len(peptides)):
+                if peptides[i]+hla in self.log:
+                    log_pep = self.log[peptides[i]+hla]
+                    pres[i+len(peptides)*j] = log_pep
+                else:
+                    pep_to_predict.append(peptides[i])
+                    hla_to_predict.append(hla)
+        if all(pres != -1):
+            return immun, pres
+        out = MHCflurry(alleles=hla_to_predict).predict_peptides(pep_to_predict).to_dataframe()
+        idx = np.lexsort((out['peptide'].values, out['allele'].values))
+       # out = out.sort_values(by = ['allele','peptide'])
+        h_v, pe_v, pr_v = out['allele'].iloc[idx].values, out['peptide'].iloc[idx].values, out['score'].iloc[idx].values
+        for j,i in enumerate(np.where(pres==-1.0)[0]):
+            h, pe, pr = h_v[j], pe_v[j], pr_v[j]
+            pres[i] = pr
+            self.log[pe+h] = pr
+            
+        return immun, pres
+
+class Baseline_homology_predictor(Basic_immunogenecity_predictor):
+    log = {}
+
+    def predict(self, peptides, hla_vector):
+        immun = np.ones(len(hla_vector*len(peptides)))
+        pres = np.ones(len(hla_vector*len(peptides)))
+        return immun, pres
     
-def compare(a,b):
+def compare_dist(a,b):
     X_samples = np.random.choice(a,1000)
     Y_samples = np.random.choice(b, 1000)
     return np.mean(X_samples > Y_samples)
@@ -322,14 +381,13 @@ def compare(a,b):
 
 def ind_dist(individual, cross_react_predictor,immun_predictor,protein1,protein2,k, N_iterations):
     result = []
-    result_cache = {}
     for i in range(N_iterations):
-        result_cache.update(individual.set_protein_wild(protein1, immun_predictor))
+        individual.set_protein_wild(protein1, immun_predictor,k)
         result.append(individual.cross_react(cross_react_predictor, immun_predictor,protein2))
-    return (result, result_cache)
+    return (result, immun_predictor.get_log())
     
 def Cross_react_predict(protein1, protein2, genotypes, immun_predictor,cross_react_predictor,N_iterations=50,k=10,N_proc=2,N_individuals=None):
-    result_cache = {}
+    result_log = {}
     if type(genotypes).__name__ == 'Population':
         individuals = genotypes.get_individual_sample(immun_predictor,N=N_individuals,mean_number=k)
     else:
@@ -340,18 +398,131 @@ def Cross_react_predict(protein1, protein2, genotypes, immun_predictor,cross_rea
         args = [(ind,cross_react_predictor, immun_predictor, protein1, protein2,k,N_iterations) for ind in individuals]
         result = pool.starmap(ind_dist,args)
     for i in result:
-        result_cache.update(i[1])
+        result_log.update(i[1])
+    immun_predictor.update_log(result_log)
     
-    immun_predictor.log.update(result_cache)
     return [r[0] for r in result]
 
 
-def Cross_react_plot(genotypes,immun_predictor,cross_react_predictor, protein1, protein2, protein3=None,N_iterations=50,k=10,N_proc=2,N_individuals=None, savefile=None):
+
+
+def Cross_react_plot(genotypes,immun_predictor,cross_react_predictor, protein1, protein2, protein3=None,protein4=None, protein5=None,N_iterations=50,k=10,N_proc=2,N_individuals=None, savefile=None):
     if N_individuals is None:
         x_len = len(genotypes)
     else:
         x_len = N_individuals
-    if protein3 is not None:    
+    if protein5 is not None:
+        x = np.array([i for i in range(1000, 1000*x_len+1000,1000)])
+        c1 = "red"
+        c2 = 'blue'
+        c3 = 'green'
+        c4 = 'purple'
+        data1 = Cross_react_predict(protein1, protein2, genotypes, immun_predictor,cross_react_predictor,N_iterations,k,N_proc,N_individuals)
+        data2 = Cross_react_predict(protein1, protein3, genotypes, immun_predictor,cross_react_predictor,N_iterations,k,N_proc,N_individuals)
+        data3 = Cross_react_predict(protein1, protein4, genotypes, immun_predictor,cross_react_predictor,N_iterations,k,N_proc,N_individuals)
+        data4 = Cross_react_predict(protein1, protein5, genotypes, immun_predictor,cross_react_predictor,N_iterations,k,N_proc,N_individuals)
+        plt.figure()
+        plt.boxplot(data1,positions=x-100,widths=150,notch=True, patch_artist=True,
+            boxprops=dict(facecolor='pink', color=c1),
+            capprops=dict(color=c1),
+            whiskerprops=dict(color=c1),
+            flierprops=dict(color=c1, markeredgecolor=c1),
+            medianprops=dict(color=c1))
+        plt.boxplot(data2,positions=x+100,widths=150,notch=True, patch_artist=True,
+            boxprops=dict(facecolor='cyan', color=c2),
+            capprops=dict(color=c2),
+            whiskerprops=dict(color=c2),
+            flierprops=dict(color=c2, markeredgecolor=c2),
+            medianprops=dict(color=c2))
+        plt.boxplot(data3,positions=x+300,widths=150,notch=True, patch_artist=True,
+            boxprops=dict(facecolor='springgreen', color=c3),
+            capprops=dict(color=c3),
+            whiskerprops=dict(color=c3),
+            flierprops=dict(color=c3, markeredgecolor=c3),
+            medianprops=dict(color=c3))
+        plt.boxplot(data4,positions=x-300,widths=150,notch=True, patch_artist=True,
+            boxprops=dict(facecolor='magenta', color=c4),
+            capprops=dict(color=c4),
+            whiskerprops=dict(color=c4),
+            flierprops=dict(color=c4, markeredgecolor=c4),
+            medianprops=dict(color=c4))
+
+
+#for j,i in enumerate(x):
+#    plt.hlines(y = result_baseline_mp_ac[j], xmin=i+25,xmax=i+175, color = 'black')
+#    plt.hlines(y = result_baseline_mp_ab[j], xmin=i-175,xmax=i-25, color = 'black')
+        plt.xlim(100,1000*x_len+1000)
+        plt.title('Cross-reactivity boxplots')
+        plt.xticks(x,[str(i) for i in range(x_len)])
+        plt.xlabel('Genotype')
+        plt.ylabel('Cross-reactivity')
+        blue_patch = mpatches.Patch(color='blue', label='C protein')
+        red_patch = mpatches.Patch(color='red', label='B protein')
+        green_patch = mpatches.Patch(color = 'green',label='D protein')
+        purple_patch = mpatches.Patch(color = 'purple',label='E protein')
+        plt.legend(handles=[blue_patch, red_patch, green_patch, purple_patch])
+#plt.hlines(y = 0.9867, xmin=100,xmax=6000, color = 'red', linestyles='--')
+#plt.hlines(y = 0.9867, xmin=100,xmax=6000, color = 'blue', linestyles='--')
+#plt.hlines(y = result_base_ab_v, xmin=250,xmax=6000, color = 'red', linestyles='--')
+#plt.hlines(y = result_base_ac_v, xmin=250,xmax=6000, color = 'blue', linestyles='--')
+#plt.xticks([1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,],['5','10','15','20','25','30','40','50','60','70','80','90','100'])
+    #plt.savefig('valid_pair.png')
+        if savefile is not None:
+            plt.savefig(savefile)
+            return
+        plt.show()
+    elif protein4 is not None:
+        x = np.array([i for i in range(800, 800*x_len+800,800)])
+        c1 = "red"
+        c2 = 'blue'
+        c3 = 'green'
+        c4 = 'purple'
+        data1 = Cross_react_predict(protein1, protein2, genotypes, immun_predictor,cross_react_predictor,N_iterations,k,N_proc,N_individuals)
+        data2 = Cross_react_predict(protein1, protein3, genotypes, immun_predictor,cross_react_predictor,N_iterations,k,N_proc,N_individuals)
+        data3 = Cross_react_predict(protein1, protein4, genotypes, immun_predictor,cross_react_predictor,N_iterations,k,N_proc,N_individuals)
+        plt.figure()
+        plt.boxplot(data1,positions=x-200,widths=150,notch=True, patch_artist=True,
+            boxprops=dict(facecolor='pink', color=c1),
+            capprops=dict(color=c1),
+            whiskerprops=dict(color=c1),
+            flierprops=dict(color=c1, markeredgecolor=c1),
+            medianprops=dict(color=c1))
+        plt.boxplot(data2,positions=x,widths=150,notch=True, patch_artist=True,
+            boxprops=dict(facecolor='cyan', color=c2),
+            capprops=dict(color=c2),
+            whiskerprops=dict(color=c2),
+            flierprops=dict(color=c2, markeredgecolor=c2),
+            medianprops=dict(color=c2))
+        plt.boxplot(data3,positions=x+200,widths=150,notch=True, patch_artist=True,
+            boxprops=dict(facecolor='springgreen', color=c3),
+            capprops=dict(color=c3),
+            whiskerprops=dict(color=c3),
+            flierprops=dict(color=c3, markeredgecolor=c3),
+            medianprops=dict(color=c3))
+#for j,i in enumerate(x):
+#    plt.hlines(y = result_baseline_mp_ac[j], xmin=i+25,xmax=i+175, color = 'black')
+#    plt.hlines(y = result_baseline_mp_ab[j], xmin=i-175,xmax=i-25, color = 'black')
+        plt.xlim(100,800*x_len+800)
+        plt.title('Cross-reactivity boxplots')
+        plt.xticks(x,[str(i) for i in range(x_len)])
+        plt.xlabel('Genotype')
+        plt.ylabel('Cross-reactivity')
+        blue_patch = mpatches.Patch(color='blue', label='C protein')
+        red_patch = mpatches.Patch(color='red', label='B protein')  
+        green_pacth = mpatches.Patch(color = 'green',label='D protein')
+        plt.legend(handles=[blue_patch, red_patch,green_patch])
+#plt.hlines(y = 0.9867, xmin=100,xmax=6000, color = 'red', linestyles='--')
+#plt.hlines(y = 0.9867, xmin=100,xmax=6000, color = 'blue', linestyles='--')
+#plt.hlines(y = result_base_ab_v, xmin=250,xmax=6000, color = 'red', linestyles='--')
+#plt.hlines(y = result_base_ac_v, xmin=250,xmax=6000, color = 'blue', linestyles='--')
+#plt.xticks([1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,],['5','10','15','20','25','30','40','50','60','70','80','90','100'])
+    #plt.savefig('valid_pair.png')
+        if savefile is not None:
+            plt.savefig(savefile)
+            return
+        plt.show()
+        
+    elif protein3 is not None:    
         x = np.array([i for i in range(500, 500*x_len+500,500)])
         c1 = "red"
         c2 = 'blue'
@@ -411,7 +582,7 @@ def protein_combine(*args):
         new_seq += arg.protein_seq + '+'
         new_pool += arg.peptide_pool
     new_protein = Protein(new_seq)
-    new_protein.peptide_pool = new_pool
+    new_protein.peptide_pool = sorted(new_pool)
     return new_protein
     
 

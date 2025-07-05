@@ -18,5 +18,5 @@ git clone https://github.com/ddd9898/IEPAPI.git
 ## 1) Run code
 
 
-Now you can use Cross_reaact.py as module in your scrips. For convenience, we have provided a notebook (Example_notebook.ipynb) that shows how you can run the code on your data 
+Now you can use Cross_reaact.py as module in your scrips. For convenience, we have provided a notebook (Example_notebook.ipynb) that shows how you can run the code on your data. You must run the notebook in the BATMAN environment. 
 
