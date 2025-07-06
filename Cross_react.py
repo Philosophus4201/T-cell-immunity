@@ -332,6 +332,71 @@ class IEPAPI_immunogenicity_predictor(Basic_immunogenecity_predictor):
 
     
 
+class Baseline_IEPAPI_predictor(Basic_immunogenecity_predictor):
+    """A class to IEPAPI presentation predictor tool
+    Attributes:
+    path_to_IEPAPI: the absolute path to IEPAPI folder
+    python_path: the absolute path to python in IEPAPI environment
+    hla_pseudoseq_data: the absolute path to HLA pseudosequence table"""
+    hla_pseudoseq_data = None
+    path_to_IEPAPI  = None
+    python_path = None
+    log = {}
+    def __init__(self, path_to_IEPAPI=None, path_to_hla_db=None, python_path=None):
+        if path_to_IEPAPI is None:
+            self.path_to_IEPAPI = os.getcwd() + '/IEPAPI/'
+        else:
+            self.path_to_IEPAPI = path_to_IEPAPI
+        if python_path is None:
+            result = subprocess.run(
+    ['conda', 'list', '-n', 'IEPAPI'],
+            capture_output=True,
+            text=True,
+            check=True)
+            self.python_path = result.stdout.splitlines()[0].split()[5][:-1]+'/bin/python3.7'
+        else:
+            self.python_path = python_path
+        if path_to_hla_db is None:
+            self.IEPAPI_db = self.path_to_IEPAPI+'data/pseudoSequence(ELIM).csv'
+        else:
+            self.IEPAPI_db = path_to_hla_db
+        self.hla_pseudoseq_data = pd.read_csv(self.IEPAPI_db)
+
+            
+    def predict(self,peptides,hla_vector):
+        immun = np.ones(len(hla_vector)*len(peptides))
+        pres = np.array([-1.0]*(len(peptides)*len(hla_vector)))
+        with open(self.path_to_IEPAPI+f'IEPAPI_input{os.getpid()}', 'w') as file:
+            file.write('peptide,HLA,seq')
+            file.write('\n')
+            for j,hla in enumerate(hla_vector):
+                if 'HLA-' not in hla:
+                    hla = 'HLA-'+hla
+                if len(hla) > 11:
+                    hla = hla[0:11]
+                hla_to_df = hla.replace('*','').replace(':','')
+                hla_pseudoseq = self.hla_pseudoseq_data.loc[self.hla_pseudoseq_data['HLA'] == hla_to_df,'pseudoSeq'].iloc[0]
+                for i in range(len(peptides)):
+                    if peptides[i]+hla in self.log:
+                        log_pep = self.log[peptides[i]+hla]
+                        pres[i+len(peptides)*j] = log_pep
+                    else:
+                        file.write(f'{peptides[i]},{hla},{hla_pseudoseq}')
+                        file.write('\n')
+        if all(pres != -1):
+            os.remove(self.path_to_IEPAPI+f'IEPAPI_input{os.getpid()}')
+            return immun, pres
+        subprocess.run([self.python_path, self.path_to_IEPAPI+'IEPAPI_predict.py', '--input', f'IEPAPI_input{os.getpid()}', '--output',f'IEPAPI_output{os.getpid()}'],  cwd=self.path_to_IEPAPI)
+        out = pd.read_csv(self.path_to_IEPAPI+f'IEPAPI_output{os.getpid()}')
+        for j,i in enumerate(np.where(pres==-1.0)[0]):
+            pe, h, pr = out.iloc[j,0], out.iloc[j,1], out.iloc[j,2]
+            pres[i] = pr
+            self.log[pe+h] = pr
+        os.remove(self.path_to_IEPAPI+f'IEPAPI_output{os.getpid()}')
+        os.remove(self.path_to_IEPAPI+f'IEPAPI_input{os.getpid()}')
+        return immun, pres
+
+        
 class Baseline_MHCflurry_predictor(Basic_immunogenecity_predictor):
     log = {}
     def predict(self,peptides,hla_vector):
@@ -371,7 +436,8 @@ class Baseline_homology_predictor(Basic_immunogenecity_predictor):
         immun = np.ones(len(hla_vector*len(peptides)))
         pres = np.ones(len(hla_vector*len(peptides)))
         return immun, pres
-    
+
+
 def compare_dist(a,b):
     X_samples = np.random.choice(a,1000)
     Y_samples = np.random.choice(b, 1000)
