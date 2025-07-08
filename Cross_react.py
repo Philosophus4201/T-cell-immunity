@@ -75,8 +75,17 @@ class Protein:
         self.peptide_pool = None
 
 
-
-class Protein_processing:
+class Basic_protein_proccessing:
+    @abstractmethod
+    def get_peptide_weight(self,protein,k):
+        pass
+    
+    @abstractmethod
+    def processing(self,protein,k):
+        pass
+    
+    
+class Simple_protein_processing(Basic_protein_proccessing):
 
     def get_peptide_weight(self):
         return None
@@ -132,9 +141,10 @@ class Individual:
     protein_wild: object of the class Protein that represented a wild protein
     """
     
-    def __init__(self,genotype,immun_predictor,mean_number):
+    def __init__(self,genotype,immun_predictor,mean_number=10):
         self.genotype = sorted(genotype)
         self.protein_wild = None
+        self.mean_number = mean_number
         
     def get_pMHC_pool(self,protein, immun_predictor):
         pep_list = protein.peptide_pool
@@ -151,18 +161,18 @@ class Individual:
             pMHC_list.append(peptide_MHC_complex(pMHC_d['peptide'][i],pMHC_d['HLA'][i],pMHC_d['pres'][i],pMHC_d['immun'][i],pMHC_d['HLA_i'][i]))
         return pMHC_list
                 
-    def set_protein_wild(self, protein_wild,immun_predictor,mean_number=10):
+    def set_protein_wild(self, protein_wild,immun_predictor):
         self.protein_wild = protein_wild
         pool_result = self.get_pMHC_pool(self.protein_wild,immun_predictor)
-        self.pMHC_pool = self.pMHC_selection(pool_result,mean_number)
+        self.pMHC_pool = self.pMHC_selection(pool_result,self.mean_number)
         
-    def pMHC_selection(self,pMHC,mean_number):
+    def pMHC_selection(self,pMHC):
         P=[]
         for pMHC_i in pMHC:
             P.append(pMHC_i.pres*pMHC_i.immun)
         P = np.array(P)
-        if mean_number is not None:
-            P = P-((sum(P)-mean_number)/len(P))
+        if self.mean_number is not None:
+            P = P-((sum(P)-self.mean_number)/len(P))
             P[P<0] = 0
             P[P>1] = 1
         pMHC_selected = []
@@ -445,10 +455,10 @@ def compare_dist(a,b):
 
 
 
-def ind_dist(individual, cross_react_predictor,immun_predictor,protein1,protein2,k, N_iterations):
+def ind_dist(individual, cross_react_predictor,immun_predictor,protein1,protein2,N_iterations):
     result = []
     for i in range(N_iterations):
-        individual.set_protein_wild(protein1, immun_predictor,k)
+        individual.set_protein_wild(protein1, immun_predictor)
         result.append(individual.cross_react(cross_react_predictor, immun_predictor,protein2))
     return (result, immun_predictor.get_log())
     
@@ -461,7 +471,7 @@ def Cross_react_predict(protein1, protein2, genotypes, immun_predictor,cross_rea
         for genotype in genotypes:
             individuals.append((Individual(genotype,immun_predictor,k)))
     with Pool(processes=N_proc) as pool:
-        args = [(ind,cross_react_predictor, immun_predictor, protein1, protein2,k,N_iterations) for ind in individuals]
+        args = [(ind,cross_react_predictor, immun_predictor, protein1, protein2,N_iterations) for ind in individuals]
         result = pool.starmap(ind_dist,args)
     for i in result:
         result_log.update(i[1])
